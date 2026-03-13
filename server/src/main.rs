@@ -451,81 +451,48 @@ impl Index {
         let admin = self.find_admin(lat, lng);
         let (addr, interp, street) = self.query_geo(lat, lng);
 
-        // 1. Try nearest address point
+        // Determine house_number and road from best geo match (priority: address > interpolation > street)
+        let mut house_number: Option<Cow<'_, str>> = None;
+        let mut road: Option<&str> = None;
+
         if let Some((dist, point)) = addr {
             if dist < max_addr_dist {
-                let mut a = Address {
-                    formatted_address: None,
-                    housenumber: Some(Cow::Borrowed(self.get_string(point.housenumber_id))),
-                    street: Some(self.get_string(point.street_id)),
-                    city: admin.city,
-                    state: admin.state,
-                    county: admin.county,
-                    postcode: admin.postcode,
-                    country: admin.country,
-                    country_code: admin.country_code.map(|c| String::from_utf8_lossy(&c).into_owned()),
-                };
-                a.formatted_address = format_address(&a);
-                return a;
+                house_number = Some(Cow::Borrowed(self.get_string(point.housenumber_id)));
+                road = Some(self.get_string(point.street_id));
+            }
+        }
+        if road.is_none() {
+            if let Some((dist, street_name, number)) = interp {
+                if dist < max_addr_dist {
+                    house_number = Some(Cow::Owned(number.to_string()));
+                    road = Some(street_name);
+                }
+            }
+        }
+        if road.is_none() {
+            if let Some((dist, way)) = street {
+                if dist < max_street_dist {
+                    road = Some(self.get_string(way.name_id));
+                }
             }
         }
 
-        // 2. Try interpolation
-        if let Some((dist, street_name, number)) = interp {
-            if dist < max_addr_dist {
-                let mut a = Address {
-                    formatted_address: None,
-                    housenumber: Some(Cow::Owned(number.to_string())),
-                    street: Some(street_name),
-                    city: admin.city,
-                    state: admin.state,
-                    county: admin.county,
-                    postcode: admin.postcode,
-                    country: admin.country,
-                    country_code: admin.country_code.map(|c| String::from_utf8_lossy(&c).into_owned()),
-                };
-                a.formatted_address = format_address(&a);
-                return a;
-            }
+        if road.is_none() && admin.country.is_none() && admin.city.is_none() {
+            return Address::default();
         }
 
-        // 3. Fall back to nearest street
-        if let Some((dist, way)) = street {
-            if dist < max_street_dist {
-                let mut a = Address {
-                    formatted_address: None,
-                    housenumber: None,
-                    street: Some(self.get_string(way.name_id)),
-                    city: admin.city,
-                    state: admin.state,
-                    county: admin.county,
-                    postcode: admin.postcode,
-                    country: admin.country,
-                    country_code: admin.country_code.map(|c| String::from_utf8_lossy(&c).into_owned()),
-                };
-                a.formatted_address = format_address(&a);
-                return a;
-            }
-        }
-
-        // 4. Admin only
-        if admin.country.is_some() || admin.city.is_some() {
-            let mut a = Address {
-                formatted_address: None,
-                housenumber: None,
-                street: None,
-                city: admin.city,
-                state: admin.state,
-                county: admin.county,
-                postcode: admin.postcode,
-                country: admin.country,
-                country_code: admin.country_code.map(|c| String::from_utf8_lossy(&c).into_owned()),
-            };
-            a.formatted_address = format_address(&a);
-            return a;
-        }
-
-        Address::default()
+        let address = AddressDetails {
+            house_number,
+            road,
+            city: admin.city,
+            state: admin.state,
+            county: admin.county,
+            postcode: admin.postcode,
+            country: admin.country,
+            country_code: admin.country_code.map(|c| String::from_utf8_lossy(&c).into_owned()),
+        };
+        let display_name = format_address(&address);
+        Address { display_name, address }
     }
 }
 
@@ -601,13 +568,11 @@ struct AdminResult<'a> {
 }
 
 #[derive(Serialize, Default)]
-struct Address<'a> {
-    #[serde(rename = "formattedAddress", skip_serializing_if = "Option::is_none")]
-    formatted_address: Option<String>,
+struct AddressDetails<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    housenumber: Option<Cow<'a, str>>,
+    house_number: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    street: Option<&'a str>,
+    road: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     city: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -618,8 +583,15 @@ struct Address<'a> {
     postcode: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     country: Option<&'a str>,
-    #[serde(rename = "countryCode", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     country_code: Option<String>,
+}
+
+#[derive(Serialize, Default)]
+struct Address<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    address: AddressDetails<'a>,
 }
 
 // Address formatting patterns by country code
@@ -640,24 +612,24 @@ fn format_rules(country_code: Option<&str>) -> (bool, bool, bool) {
     }
 }
 
-fn format_address(addr: &Address<'_>) -> Option<String> {
-    if addr.street.is_none() && addr.city.is_none() && addr.country.is_none() {
+fn format_address(addr: &AddressDetails<'_>) -> Option<String> {
+    if addr.road.is_none() && addr.city.is_none() && addr.country.is_none() {
         return None;
     }
 
     let (number_after, postcode_before_city, include_state) = format_rules(addr.country_code.as_deref());
     let mut parts: Vec<String> = Vec::new();
 
-    // Street + housenumber
-    if let Some(street) = addr.street {
-        if let Some(ref hn) = addr.housenumber {
+    // Street + house number
+    if let Some(road) = addr.road {
+        if let Some(ref hn) = addr.house_number {
             if number_after {
-                parts.push(format!("{} {}", street, hn));
+                parts.push(format!("{} {}", road, hn));
             } else {
-                parts.push(format!("{} {}", hn, street));
+                parts.push(format!("{} {}", hn, road));
             }
         } else {
-            parts.push(street.to_string());
+            parts.push(road.to_string());
         }
     }
 
@@ -711,14 +683,14 @@ fn format_address(addr: &Address<'_>) -> Option<String> {
 #[derive(Deserialize)]
 struct QueryParams {
     lat: f64,
-    lng: f64,
+    lon: f64,
 }
 
 async fn reverse_geocode(
     Query(params): Query<QueryParams>,
     index: axum::extract::State<Arc<Index>>,
 ) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
-    let address = index.query(params.lat, params.lng);
+    let address = index.query(params.lat, params.lon);
     let json = serde_json::to_string(&address).unwrap_or_default();
     ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
 }

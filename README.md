@@ -66,19 +66,23 @@ PBF files can be downloaded from [Geofabrik](https://download.geofabrik.de/).
 
 Query parameters:
 - `lat` - latitude (required)
-- `lng` - longitude (required)
+- `lon` - longitude (required)
 
-Response:
+Response follows [Nominatim](https://nominatim.org/release-docs/latest/api/Reverse/) format:
 
 ```json
 {
-  "housenumber": "42",
-  "street": "Avenue de la Costa",
-  "city": "Monaco",
-  "state": "Monaco",
-  "county": "Monaco",
-  "postcode": "98000",
-  "country": "Monaco"
+  "display_name": "Avenue de la Costa 42, 98000 Monaco, Monaco",
+  "address": {
+    "house_number": "42",
+    "road": "Avenue de la Costa",
+    "city": "Monaco",
+    "state": "Monaco",
+    "county": "Monaco",
+    "postcode": "98000",
+    "country": "Monaco",
+    "country_code": "MC"
+  }
 }
 ```
 
