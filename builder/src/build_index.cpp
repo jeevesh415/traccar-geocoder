@@ -14,7 +14,9 @@
 #include <osmium/io/pbf_input.hpp>
 #include <osmium/visitor.hpp>
 #include <osmium/handler/node_locations_for_ways.hpp>
-#include <osmium/index/map/sparse_mem_array.hpp>
+#include <fcntl.h>
+#include <unistd.h>
+#include <osmium/index/map/sparse_file_array.hpp>
 #include <osmium/area/assembler.hpp>
 #include <osmium/area/multipolygon_manager.hpp>
 
@@ -855,11 +857,13 @@ int main(int argc, char* argv[]) {
         // --- Pass 2: process all data ---
         std::cerr << "  Pass 2: processing nodes, ways, and areas..." << std::endl;
 
-        using index_type = osmium::index::map::SparseMemArray<
+        using index_type = osmium::index::map::SparseFileArray<
             osmium::unsigned_object_id_type, osmium::Location>;
         using location_handler_type = osmium::handler::NodeLocationsForWays<index_type>;
 
-        index_type index;
+        std::string tmp_path = output_dir + "/node_locations.tmp";
+        int fd = open(tmp_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0600);
+        index_type index{fd};
         location_handler_type location_handler{index};
 
         osmium::io::Reader reader2{input_file};
@@ -868,6 +872,8 @@ int main(int argc, char* argv[]) {
             osmium::apply(buffer, handler);
         }));
         reader2.close();
+        close(fd);
+        std::remove(tmp_path.c_str());
     }
 
     std::cerr << "Done reading:" << std::endl;
