@@ -124,6 +124,10 @@ static std::vector<S2CellId> cover_edge(double lat1, double lng1, double lat2, d
     S2Point p1 = S2LatLng::FromDegrees(lat1, lng1).ToPoint();
     S2Point p2 = S2LatLng::FromDegrees(lat2, lng2).ToPoint();
 
+    if (p1 == p2) {
+        return {S2CellId(p1).parent(kStreetCellLevel)};
+    }
+
     std::vector<S2Point> points = {p1, p2};
     S2Polyline polyline(points);
 
